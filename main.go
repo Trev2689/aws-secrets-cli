@@ -2,17 +2,15 @@ package main
 
 import (
 	"context"
-	//      "encoding/json"
 	"flag"
 	"fmt"
 	"io/ioutil"
 	"os"
+	"strings"
 	"time"
 
-	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/secretsmanager"
-	// "github.com/aws/aws-sdk-go-v2/service/secretsmanager/types"
 )
 
 func main() {
@@ -20,86 +18,78 @@ func main() {
 	secretNameFlag := flag.String("name", "", "AWS secret name")
 	regionFlag := flag.String("region", "", "AWS region")
 	descriptionFlag := flag.String("description", "", "Description for the secret")
-	//kmsKeyIDFlag := flag.String("kms-key-id", "", "KMS key ID for encryption")
 	jsonFilePathFlag := flag.String("json-file", "", "Path to JSON file containing the secret value")
 	timeoutFlag := flag.Duration("timeout", 10*time.Second, "Timeout for API call")
 	flag.Parse()
 
-	// Validate required input parameters
+	// Check required input parameters
 	if *regionFlag == "" || *descriptionFlag == "" || *secretNameFlag == "" || *jsonFilePathFlag == "" {
 		fmt.Println("Please provide all required input parameters: region, description, secret name, json-file")
 		flag.PrintDefaults()
 		os.Exit(1)
 	}
 
-	// Read secret value from JSON file
+	// Read secret value from a JSON file
+	// TODO: Make this more robust e.g kv on each key
 	secretValue, err := readSecretFromJSON(*jsonFilePathFlag)
 	if err != nil {
 		fmt.Println("Error reading secret value from JSON file:", err)
 		os.Exit(1)
 	}
 
-	// Create a context with timeout
+	// Create context with timeout
 	ctx, cancel := context.WithTimeout(context.Background(), *timeoutFlag)
 	defer cancel()
 
-	// Load AWS SDK configuration with the specified region
+	// Load AWS SDK configuration with the specified region, assume we have this inside vault
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(*regionFlag))
 	if err != nil {
 		fmt.Println("Error loading AWS SDK config:", err)
 		os.Exit(1)
 	}
 
-	// Create a Secrets Manager client with the specified configuration
+	// Create Secrets Manager client with the config from above
 	client := secretsmanager.NewFromConfig(cfg)
 
-	// Check if the secret already exists
-	//      describeInput := &secretsmanager.DescribeSecretInput{
-	//              SecretId: descriptionFlag,
-	//      }
-	//      _, err = client.DescribeSecret(ctx, describeInput)
-	//      if err == nil {
-	//              fmt.Println("Secret already exists:", *descriptionFlag)
-	//              return
-	//      } else if !secretsmanager.IsResourceNotFoundException(err) {
-	//              fmt.Println("Error describing secret:", err)
-	//              os.Exit(1)
-	//}
+	// Check if the secret we want to create already exists
+	describeInput := &secretsmanager.DescribeSecretInput{
+		SecretId: secretNameFlag,
+	}
 
-	// Create a Secrets Manager client with the specified configuration
-	//client := secretsmanager.NewFromConfig(cfg)
+	_, err = client.DescribeSecret(ctx, describeInput)
+	if err != nil {
+		// Check if the error message indicates that the secret doesn't exist
+		// TODO: Could be more robust here on explicityly checking error types
+		if strings.Contains(err.Error(), "ResourceNotFoundException") {
+			// Secret does not exist, so proceed with creation
+			fmt.Println("Secret does not exist. Proceeding with creation...")
+		} else {
+			// Some other error occurred, best to exit
+			fmt.Println("Error describing secret:", err)
+			os.Exit(1)
+		}
+	} else {
+		// Secret already exists, dont proceed with creation
+		fmt.Println("Secret already exists:", *descriptionFlag)
+		return
+	}
 
-	// Check if the secret already exists
-	//      describeInput := &secretsmanager.DescribeSecretInput{
-	//              SecretId: descriptionFlag,
-	//      }
-	//      _, err = client.DescribeSecret(ctx, describeInput)
-	//      if err == nil {
-	//              fmt.Println("Secret already exists:", *descriptionFlag)
-	//              return
-	//      } else if !secretsmanager.IsResourceNotFoundException(err) {
-	//              fmt.Println("Error describing secret:", err)
-	//              os.Exit(1)
-	//      }
-
-	// Create input for the CreateSecret API operation with the specified KMS key ID and description
+	// Create input for the CreateSecret API operation
 	createInput := &secretsmanager.CreateSecretInput{
 		Name:         secretNameFlag,
 		Description:  descriptionFlag,
-		SecretString: aws.String(secretValue),
-		//KmsKeyId:         kmsKeyIDFlag,
-		//ClientRequestToken: aws.String(*descriptionFlag), // Optional: a unique identifier for the request
+		SecretString: &secretValue,
 	}
 
-	// Call the CreateSecret API operation with context
+	// Call CreateSecret API operation with above input
 	createOutput, err := client.CreateSecret(ctx, createInput)
 	if err != nil {
 		fmt.Println("Error creating secret:", err)
 		os.Exit(1)
 	}
 
-	// Print the ARN of the created secret
-	fmt.Println("Secret ARN:", *createOutput.ARN)
+	// Print ARN of the created secret
+	fmt.Println("Successfully created, Secret ARN:", *createOutput.ARN)
 }
 
 func readSecretFromJSON(filePath string) (string, error) {
