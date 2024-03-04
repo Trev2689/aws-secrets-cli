@@ -20,6 +20,7 @@ func main() {
 	descriptionFlag := flag.String("description", "", "Description for the secret")
 	jsonFilePathFlag := flag.String("json-file", "", "Path to JSON file containing the secret value")
 	timeoutFlag := flag.Duration("timeout", 10*time.Second, "Timeout for API call")
+	updateFlag := flag.Bool("update", false, "Update the secret if it already exists")
 	flag.Parse()
 
 	// Check required input parameters
@@ -69,8 +70,29 @@ func main() {
 			os.Exit(1)
 		}
 	} else {
-		// Secret already exists, dont proceed with creation
-		fmt.Println("Secret already exists:", *descriptionFlag)
+		// Secret already exists, check if update flag is set
+		if !*updateFlag {
+			fmt.Println("Secret already exists and update flag not set. Exiting.")
+			return
+		}
+	}
+
+	if *updateFlag {
+		// Update input for the UpdateSecret API operation
+		updateInput := &secretsmanager.UpdateSecretInput{
+			SecretId:     secretNameFlag,
+			Description:  descriptionFlag,
+			SecretString: &secretValue,
+		}
+
+		// Call UpdateSecret API operation with above input
+		_, err = client.UpdateSecret(ctx, updateInput)
+		if err != nil {
+			fmt.Println("Error updating secret:", err)
+			os.Exit(1)
+		}
+
+		fmt.Println("Successfully updated secret.")
 		return
 	}
 
